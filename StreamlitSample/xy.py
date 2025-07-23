@@ -2,6 +2,10 @@ import streamlit as st
 import pandas as pd
 import yaml
 import subprocess
+import tempfile
+from fields import Fields
+
+fields = Fields()
 
 class DoseiaGUI:
     #import streamlit as st
@@ -11,6 +15,7 @@ class DoseiaGUI:
     
     def __init__(self):
         self.df = pd.read_excel("doe_haz_cat_excel.xlsx")
+        self.df2 = pd.read_csv("Annex_H_ICRP119_dcf_inhal_reactive_soluble_gases_public.csv")["Nuclide"].dropna().unique().tolist()
         self.radionuclides = sorted(self.df["Radionuclide"].dropna().unique().tolist())
         self.selected = []
         self.coefficients = {}
@@ -23,28 +28,28 @@ class DoseiaGUI:
             self.inputs["Selected Radionuclides"] = self.selected
 
             if self.selected:
-                st.markdown("### Inhalation Dose Coefficients per Radionuclide")
+                st.markdown("### Inhalation Dose Types per Radionuclide")
 
                 default_coef = ["Max"] * len(self.selected)
                 df_selected = pd.DataFrame({
                     "Radionuclide": self.selected,
-                    "Inhalation Coefficient": default_coef
+                    "Inhalation Type": default_coef
                 })
 
                 edited_df = st.data_editor(
                     df_selected,
                     column_config={
-                        "Inhalation Coefficient": st.column_config.SelectboxColumn(
-                            "Inhalation Coefficient",
-                            options=["Max", "F", "M", "S"],
+                        "Inhalation Type": st.column_config.SelectboxColumn(
+                            "Inhalation Type",
+                            options=["Max", "F", "M", "S", "V"] if any(rn in self.df2 for rn in self.selected) else ["Max", "F", "M", "S"],
                             required=True
                         )
                     },
                     hide_index=True
                 )
 
-                self.coefficients = dict(zip(edited_df["Radionuclide"], edited_df["Inhalation Coefficient"]))
-                self.inputs["Radionuclide Coefficients"] = self.coefficients
+                self.coefficients = dict(zip(edited_df["Radionuclide"], edited_df["Inhalation Type"]))
+                self.inputs["type_rad"] = self.coefficients
 
                 with st.popover("Radionuclide Info", icon=":material/info:"):
                     st.markdown("### Details for Selected Radionuclides")
@@ -65,15 +70,33 @@ class DoseiaGUI:
         import os
 
         if self.selected:
+            downloads_path = os.path.join(os.path.expanduser("~"), "Downloads")
+            os.makedirs(downloads_path, exist_ok=True)
+
             compute_dose = st.selectbox("Compute dose?", ["No", "Yes"])
-            self.inputs["Compute Dose"] = compute_dose
+            self.inputs["run_dose_computation"] = compute_dose == "Yes"
+            with st.container():
+                col_pick1, col_pick2 = st.columns([10, 1])
+                with col_pick1:
+                    pickle_it = st.toggle("Pickle it?", value=False)
+                    self.inputs["pickle_it"] = pickle_it
+                with col_pick2:
+                    with st.popover("info", icon=":material/info:"):
+                        st.markdown("### 🧊 Pickle it?")
+                        st.write(
+                            "If this is enabled, the program will serialize internal Python objects (like input data) "
+                            "into a `.pkl` file for advanced reuse, debugging, or deeper analysis. "
+                            "This is mainly for advanced users or developers."
+                        )
+                        st.info("Leave this **off** if you're not sure.")
+
             section_title = "🧮 Dose Computation" if compute_dose == "Yes" else "🌫️ Dilution Factor Computation"
 
             with st.expander(section_title):
                 col1, col2 = st.columns(2)
                 with col1:
                     release_height = st.number_input("Release height (m)", min_value=0.0)
-                    self.inputs["Release Height (m)"] = release_height
+                    self.inputs["release_height"] = release_height
                 with col2:
                     downwind_str = st.text_input("Downwind distances (comma-separated, in meters)", "100,200")
                     try:
@@ -81,23 +104,42 @@ class DoseiaGUI:
                     except ValueError:
                         st.error("Please enter only numeric values separated by commas.")
                         downwind = []
-                    self.inputs["Downwind Distances (m)"] = downwind
+                    self.inputs["downwind_distances"] = downwind
 
                 col3, col4 = st.columns(2)
                 with col3:
                     plant_boundary = st.selectbox("Select plant boundary (must be in downwind list):", downwind if downwind else [0])
                     release_type = st.selectbox("Release type:", ["Long-term", "Short-term"])
-                    self.inputs["Plant Boundary"] = plant_boundary
-                    self.inputs["Release Type"] = release_type
+                    self.inputs["plant_boundary"] = plant_boundary
+                    self.inputs["long_term_release"] = release_type == "Long-term"  #key name as per backend expectation
+                    self.inputs["single_plume"] = release_type == "Short-term"
                 with col4:
                     measurement_height = st.number_input("Measurement height (m)", min_value=0.0)
-                    self.inputs["Measurement Height (m)"] = measurement_height
+                    self.inputs["measurement_height"] = measurement_height
                     if release_type == "Long-term":
-                        concentration = st.number_input("Ground-level time-integrated concentration (Z=0)?", min_value=0.0)
-                        self.inputs["Concentration (Z=0)"] = concentration
+                        concentration = st.selectbox("Ground-level time-integrated concentration (Z=0)?", ["Yes", "No"])
+                        self.inputs["max_conc_plume_central_line_gl"] = concentration == "Yes" 
+                        #Further logic to be added from continuous plume func/ inp z when No
+                        if concentration == "Yes":
+                            self.inputs["Z"] = 0
+                        else:
+                            with st.popover("Enter Z value"):
+                                z_value = st.number_input("Z value (m)", min_value=0.0, key="z_val_long")
+                                self.inputs["Z"] = z_value
+                                
                     elif release_type == "Short-term":
                         centerline = st.selectbox("Perform centerline dose projection (Y=0, Z=0)?", ["Yes", "No"])
-                        self.inputs["Centerline Projection"] = centerline
+                        self.inputs["max_conc_plume_central_line_gl"] = centerline == "Yes"
+                        #Furhter logic to be added from single plume func/ inp y,z when No
+                        if centerline == "Yes":
+                            self.inputs["Y"] = 0
+                            self.inputs["Z"] = 0
+                        else:
+                            with st.popover("Enter Y and Z values"):
+                                y_val = st.number_input("Y value (m)", min_value=0.0, key="y_val_short")
+                                z_val = st.number_input("Z value (m)", min_value=0.0, key="z_val_short")
+                                self.inputs["Y"] = y_val
+                                self.inputs["Z"] = z_val
                 
                 #TEMPORARY FIX: change to a button
                 self.inputs["have_dilution_factor"] = False
@@ -122,10 +164,10 @@ class DoseiaGUI:
 
                 with col6:
                     calm = st.selectbox("Calm correction?", ["No", "Yes"])
-                    self.inputs["Calm Correction"] = calm
+                    self.inputs["calm_correction"] = calm
 
                 has_meta = st.selectbox("Have meteorological data?", ["No", "Yes"])
-                self.inputs["have_met_data"] = has_meta
+                self.inputs["have_met_data"] = has_meta == "Yes"
 
                 if has_meta == "Yes":
                     uploaded_file = st.file_uploader("Upload meteorological data (CSV/Excel)", type=["csv", "xlsx"])
@@ -139,26 +181,33 @@ class DoseiaGUI:
                         )
 
                     if uploaded_file is not None:
-                        if uploaded_file.name.endswith(".csv"):
-                            met_df = pd.read_csv(uploaded_file)
-                        else:
-                            met_df = pd.read_excel(uploaded_file)
+                        self.inputs = fields.met_data(uploaded_file, self.inputs)
+                        #TEMPORARY FIX
+                        self.inputs["sampling_time"] = 60
+        
+                    else:
+                        st.warning("Please upload a meteorological file to proceed.")
+                        self.inputs["path_met_data"] = None
 
-                        st.markdown("#### Detected Columns:")
-                        columns = met_df.columns.tolist()
-                        st.write(columns)
-
-                        col_speed = st.selectbox("Column for Wind Speed:", columns)
-                        col_direction = st.selectbox("Column for Wind Direction:", columns)
-                        col_stability = st.selectbox("Column for Stability:", columns)
-
-                        self.inputs["Meteorological Columns"] = {
-                            "Wind Speed Column": col_speed,
-                            "Wind Direction Column": col_direction,
-                            "Stability Column": col_stability
-                        }
                 else:
                     st.markdown("Using default meteorological data.")
+                    self.inputs["path_met_file"] = "sample_met_data.xlsx"
+
+                    scale_choice = st.selectbox("Would you like to scale dilution factor with your own mean wind speed?", ["No", "Yes"])
+                    self.inputs["like_to_scale_with_mean_speed"] = scale_choice == "Yes"
+                    if scale_choice == "Yes":
+                        st.markdown("### 🌬️ Mean Wind Speed for Stability Categories")
+                        stab_cols = st.columns(6)
+                        mean_speed_inputs = []
+                        for i, cat in enumerate(["A", "B", "C", "D", "E", "F"]):
+                            with stab_cols[i]:
+                                mean_speed = st.number_input(f"{cat}", min_value=0.0, value=1.0, step=0.1, key=f"stab_{cat}")
+                                mean_speed_inputs.append(mean_speed)
+                        self.inputs["mean_speed_stab_cat_wise"] = mean_speed_inputs
+                    else:
+                        with st.popover("Note", icon=":material/info:"):
+                            st.markdown("**Dilution factor won't be scaled** because meteorological data was not provided.")
+                            st.write("Default mean wind speed = `1` will be used for all stability categories.")
 
                 with st.expander("Review Your Inputs", icon=":material/overview:"):
                     st.markdown("### 💡 Input Overview")
@@ -179,11 +228,9 @@ class DoseiaGUI:
                         else:
                             st.markdown(f"**{label}:** `{value}`")
 
-                if st.button("Run Simulation", icon=":material/manufacturing:"):
+                if st.button("Run", icon=":material/manufacturing:"):
                     with st.spinner("Running simulation and generating files..."):
                         time.sleep(2.5)
-                        downloads_path = os.path.join(os.path.expanduser("~"), "Downloads")
-                        os.makedirs(downloads_path, exist_ok=True)
 
                         # 1. Save input YAML
                         yaml_path = os.path.join(downloads_path, "input_log.yaml")
@@ -198,7 +245,7 @@ class DoseiaGUI:
                             f"python ../main.py "
                             f"--config_file \"{yaml_path}\" "
                             f"--logdir \"{downloads_path}\" "
-                            f"--output_file_name \"input_log\""
+                            f"--output_file_name \"output_log.out\""
                         )
                         result = subprocess.run(command, shell=True, capture_output=True, text=True)
 
@@ -216,12 +263,12 @@ class DoseiaGUI:
 
                 # 4. Show downloads after success
                 if st.session_state.get("run_triggered", False):
-                    log_path = os.path.join(downloads_path, "pydoseia_log_file.txt")
+                    log_path = os.path.join(downloads_path, "input_log_info.log")
                     if os.path.exists(log_path):
                         with open(log_path, "r") as f:
                             st.download_button("🗂️ Download Log File", f.read(), file_name="pydoseia_log_file.txt")
 
-                    out_path = os.path.join(downloads_path, "pydoseia_out_file.txt")
+                    out_path = os.path.join(downloads_path, "input_log")
                     if os.path.exists(out_path):
                         with open(out_path, "r") as f:
                             st.download_button("📊 Download Output File", f.read(), file_name="pydoseia_out_file.txt")
