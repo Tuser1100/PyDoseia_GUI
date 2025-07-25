@@ -25,7 +25,7 @@ class DoseiaGUI:
     def show_rad_info(self):
         with st.expander("☢️ RAD-INFO"):
             self.selected = st.multiselect("Choose one or more radionuclides:", options=self.radionuclides)
-            self.inputs["Selected Radionuclides"] = self.selected
+            self.inputs["rads_list"] = self.selected
 
             if self.selected:
                 st.markdown("### Inhalation Dose Types per Radionuclide")
@@ -116,7 +116,7 @@ class DoseiaGUI:
                 if release_type == "Long-term":
                     concentration = st.selectbox("Ground-level time-integrated concentration (Z=0)?", ["Yes", "No"], key=f"concentration_{'dose' if compute_dose else 'df'}")
                     self.inputs["max_conc_plume_central_line_gl"] = concentration == "Yes" 
-                    #Further logic to be added from continuous plume func/ inp z when No
+                    #Further logic added 
                     if concentration == "Yes":
                         self.inputs["Z"] = 0
                     else:
@@ -127,7 +127,7 @@ class DoseiaGUI:
                 elif release_type == "Short-term":
                     centerline = st.selectbox("Perform centerline dose projection (Y=0, Z=0)?", ["Yes", "No"], key=f"centerline_{'dose' if compute_dose else 'df'}")
                     self.inputs["max_conc_plume_central_line_gl"] = centerline == "Yes"
-                    #Furhter logic to be added from single plume func/ inp y,z when No
+                    #Furhter logic added 
                     if centerline == "Yes":
                         self.inputs["Y"] = 0
                         self.inputs["Z"] = 0
@@ -138,175 +138,138 @@ class DoseiaGUI:
                             self.inputs["Y"] = y_val
                             self.inputs["Z"] = z_val
             
-            #TEMPORARY FIX: change to a button
-            self.inputs["have_dilution_factor"] = False
-                        
-            #Duplicacy & redundancy errors 
-            _ = '''  
-            has_dilution = st.selectbox("Do you already have a dilution factor?", ["No", "Yes"])
-            self.inputs["dilution_factor"] = has_dilution
+            #Dilution Factor logic, Req modularization
+            if compute_dose:
+                has_dilution = st.selectbox("Do you already have a dilution factor?", ["No", "Yes"]) #Key not required as this input is inovked only under comp dose
+                self.inputs["have_dilution_factor"] = has_dilution == "Yes"
 
-            if has_dilution == "No":
-                timing_str = st.text_input("Plant operation time (start,end in hours)", "0,24")
-                try:
-                    timing_values = [float(x.strip()) for x in timing_str.split(",") if x.strip() != ""]
-                    if len(timing_values) > 2 or any(t < 0 or t > 24 for t in timing_values):
-                        st.error("Please provide up to 2 values between 0 and 24.")
-                        timing_values = []
-                    elif len(timing_values) == 2 and timing_values[0] > timing_values[1]:
-                        st.error("Start time must be less than or equal to end time.")
-                        timing_values = []
+                if has_dilution == "Yes" and downwind:
+                    st.markdown("### Enter Dilution Factor per Downwind Distance")
+                    dilution_df = pd.DataFrame({
+                        "Downwind Distance (m)": downwind,
+                        "Dilution Factor": ["" for _ in downwind]
+                    })
+                    dilution_df = st.data_editor(dilution_df, hide_index=True)
+
+                    # Validate dilution factor values
+                    try:
+                        dilution_df["Dilution Factor"] = dilution_df["Dilution Factor"].astype(float)
+                        dilution_dict = dict(zip(dilution_df["Downwind Distance (m)"], dilution_df["Dilution Factor"]))
+                        self.inputs["list_max_dilution_factor"] = dilution_dict
+                    except ValueError:
+                        st.error("All dilution factor values must be numeric.")
+                        self.inputs["list_max_dilution_factor"] = None                        
+
+            if (compute_dose and has_dilution == "No") or (not compute_dose): #METEROLOGICAL DATA HANDLING
+                has_meta = st.selectbox("Have meteorological data?", ["No", "Yes"], key=f"has_meta_{'dose' if compute_dose else 'df'}")
+                self.inputs["have_met_data"] = has_meta == "Yes"
+
+                if has_meta == "Yes":
+                    uploaded_file = st.file_uploader("Upload meteorological data (CSV/Excel)", type=["csv", "xlsx"])
+                    with open("files/sample_met_data.xlsx", "rb") as file:
+                        st.download_button(
+                            label="Download sample format",
+                            icon=":material/download:",
+                            data=file,
+                            file_name="sample_met_data.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+
+                    if uploaded_file is not None:
+                        self.inputs = fields.met_data(uploaded_file, self.inputs)
+                        self.inputs = fields.timing_calm_inputs(compute_dose, self.inputs)
+                        #TEMPORARY FIX
+                        self.inputs["sampling_time"] = 60
+        
                     else:
-                        self.inputs["start_operation_time"] = timing_values[0] if len(timing_values) > 0 else None
-                        self.inputs["end_operation_time"] = timing_values[1] if len(timing_values) > 1 else None                            
-                except ValueError:
-                    st.error("Operation time must be numeric values between 0 and 24.")
-                    timing_values = []
-                self.inputs["Calm_correction"] = st.selectbox("Calm correction?", ["No", "Yes"])
+                        st.warning("Please upload a meteorological file to proceed.")
+                        self.inputs["path_met_data"] = None
 
-            elif has_dilution == "Yes" and downwind:
-                st.markdown("### Enter Dilution Factor per Downwind Distance")
-                dilution_df = pd.DataFrame({
-                    "Downwind Distance (m)": downwind,
-                    "Dilution Factor": ["" for _ in downwind]
-                })
-                dilution_df = st.data_editor(dilution_df, hide_index=True)
-
-                # Validate dilution factor values
-                try:
-                    dilution_df["Dilution Factor"] = dilution_df["Dilution Factor"].astype(float)
-                except ValueError:
-                    st.error("All dilution factor values must be numeric.")
-            '''
-
-            col5, col6 = st.columns(2)
-            with col5:
-                timing_str = st.text_input("Plant operation time (start,end in hours)", "0,24", key=f"operation_time_{'dose' if compute_dose else 'df'}")
-                try:
-                    timing_values = [float(x.strip()) for x in timing_str.split(",") if x.strip() != ""]
-                    if len(timing_values) > 2 or any(t < 0 or t > 24 for t in timing_values):
-                        st.error("Please provide up to 2 values between 0 and 24.")
-                        timing_values = []
-                    elif len(timing_values) == 2 and timing_values[0] > timing_values[1]:
-                        st.error("Start time must be less than or equal to end time.")
-                        timing_values = []
-                    else:
-                        self.inputs["start_operation_time"] = timing_values[0] if len(timing_values) > 0 else None
-                        self.inputs["end_operation_time"] = timing_values[1] if len(timing_values) > 1 else None                            
-                except ValueError:
-                    st.error("Operation time must be numeric values between 0 and 24.")
-                    timing_values = []
-
-            with col6:
-                calm = st.selectbox("Calm correction?", ["No", "Yes"], key=f"calm_{'dose' if compute_dose else 'df'}")
-                self.inputs["calm_correction"] = calm
-
-            has_meta = st.selectbox("Have meteorological data?", ["No", "Yes"], key=f"has_meta_{'dose' if compute_dose else 'df'}")
-            self.inputs["have_met_data"] = has_meta == "Yes"
-
-            if has_meta == "Yes":
-                uploaded_file = st.file_uploader("Upload meteorological data (CSV/Excel)", type=["csv", "xlsx"])
-                with open("files/sample_met_data.xlsx", "rb") as file:
-                    st.download_button(
-                        label="Download sample format",
-                        icon=":material/download:",
-                        data=file,
-                        file_name="sample_met_data.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-
-                if uploaded_file is not None:
-                    self.inputs = fields.met_data(uploaded_file, self.inputs)
-                    #TEMPORARY FIX
-                    self.inputs["sampling_time"] = 60
-    
                 else:
-                    st.warning("Please upload a meteorological file to proceed.")
-                    self.inputs["path_met_data"] = None
+                    st.markdown("Using default meteorological data.")
+                    self.inputs["path_met_file"] = "sample_met_data.xlsx"
 
-            else:
-                st.markdown("Using default meteorological data.")
-                self.inputs["path_met_file"] = "sample_met_data.xlsx"
+                    scale_choice = st.selectbox("Would you like to scale dilution factor with your own mean wind speed?", ["No", "Yes"], key=f"scale_choice_{'dose' if compute_dose else 'df'}")
+                    self.inputs["like_to_scale_with_mean_speed"] = scale_choice == "Yes"
+                    if scale_choice == "Yes":
+                        st.markdown("### 🌬️ Mean Wind Speed for Stability Categories")
+                        stab_cols = st.columns(6)
+                        mean_speed_inputs = []
+                        for i, cat in enumerate(["A", "B", "C", "D", "E", "F"]):
+                            with stab_cols[i]:
+                                mean_speed = st.number_input(f"{cat}", min_value=0.0, value=1.0, step=0.1, key=f"stab_{cat}_{'dose' if compute_dose else 'df'}")
+                                mean_speed_inputs.append(mean_speed)
+                        self.inputs["ask_mean_speed_data"] = mean_speed_inputs
+                    else:
+                        with st.popover("Note", icon=":material/info:"):
+                            st.markdown("Default mean wind speed = `1` will be used for all stability categories.")
 
-                scale_choice = st.selectbox("Would you like to scale dilution factor with your own mean wind speed?", ["No", "Yes"], key=f"scale_choice_{'dose' if compute_dose else 'df'}")
-                self.inputs["like_to_scale_with_mean_speed"] = scale_choice == "Yes"
-                if scale_choice == "Yes":
-                    st.markdown("### 🌬️ Mean Wind Speed for Stability Categories")
-                    stab_cols = st.columns(6)
-                    mean_speed_inputs = []
-                    for i, cat in enumerate(["A", "B", "C", "D", "E", "F"]):
-                        with stab_cols[i]:
-                            mean_speed = st.number_input(f"{cat}", min_value=0.0, value=1.0, step=0.1, key=f"stab_{cat}_{'dose' if compute_dose else 'df'}")
-                            mean_speed_inputs.append(mean_speed)
-                    self.inputs["ask_mean_speed_data"] = mean_speed_inputs
+        if compute_dose:
+            self.inputs = fields.dose_type_selector(self.inputs)                        
+
+        with st.expander("Review Your Inputs", icon=":material/overview:"):
+            st.markdown("### 💡 Input Overview")
+            for key, value in self.inputs.items():
+                if value is None or value == []:
+                    continue
+
+                label = key.replace("_", " ").capitalize()
+
+                if isinstance(value, dict):
+                    st.markdown(f"**{label}:**")
+                    for sub_key, sub_value in value.items():
+                        st.markdown(f"- {sub_key}: `{sub_value}`")
+                elif isinstance(value, list):
+                    st.markdown(f"**{label}:**")
+                    for item in value:
+                        st.markdown(f"- `{item}`")
                 else:
-                    with st.popover("Note", icon=":material/info:"):
-                        st.markdown("**Dilution factor won't be scaled** because meteorological data was not provided.")
-                        st.write("Default mean wind speed = `1` will be used for all stability categories.")
+                    st.markdown(f"**{label}:** `{value}`")
 
-            with st.expander("Review Your Inputs", icon=":material/overview:"):
-                st.markdown("### 💡 Input Overview")
-                for key, value in self.inputs.items():
-                    if value is None or value == []:
-                        continue
+        if st.button("Run", icon=":material/manufacturing:", key=f"run_btn_{'dose' if compute_dose else 'df'}"):
+            with st.spinner("Running simulation and generating files..."):
+                time.sleep(2.5)
 
-                    label = key.replace("_", " ").capitalize()
+                # 1. Save input YAML
+                yaml_path = os.path.join(downloads_path, "input_log.yaml")
+                yaml_data = yaml.dump(self.inputs, sort_keys=False, allow_unicode=True, default_flow_style=False)
+                with open(yaml_path, "w") as f:
+                    f.write(yaml_data)
 
-                    if isinstance(value, dict):
-                        st.markdown(f"**{label}:**")
-                        for sub_key, sub_value in value.items():
-                            st.markdown(f"- {sub_key}: `{sub_value}`")
-                    elif isinstance(value, list):
-                        st.markdown(f"**{label}:**")
-                        for item in value:
-                            st.markdown(f"- `{item}`")
-                    else:
-                        st.markdown(f"**{label}:** `{value}`")
+                # 2. Run backend subprocess
+                logdir_name = downloads_path
+                input_filename = "input_log"
+                command = (
+                    f"python ../main.py "
+                    f"--config_file \"{yaml_path}\" "
+                    f"--logdir \"{downloads_path}\" "
+                    f"--output_file_name \"output_log.out\""
+                )
+                result = subprocess.run(command, shell=True, capture_output=True, text=True)
 
-            if st.button("Run", icon=":material/manufacturing:", key=f"run_btn_{'dose' if compute_dose else 'df'}"):
-                with st.spinner("Running simulation and generating files..."):
-                    time.sleep(2.5)
+                # 3. Handle result
+                if result.returncode != 0:
+                    st.error("❌ Backend processing failed:")
+                    st.code(result.stderr)
+                    st.text(result.stdout)
+                    st.session_state["run_triggered"] = False
+                else:
+                    st.success("Simulation complete. Files saved to Downloads folder.", icon=":material/published_with_changes:")
+                    st.session_state["run_triggered"] = True
 
-                    # 1. Save input YAML
-                    yaml_path = os.path.join(downloads_path, "input_log.yaml")
-                    yaml_data = yaml.dump(self.inputs, sort_keys=False, allow_unicode=True, default_flow_style=False)
-                    with open(yaml_path, "w") as f:
-                        f.write(yaml_data)
+            st.download_button("📘 Download YAML Input Log", data=yaml_data, file_name="input_log.yaml", mime="text/yaml")
 
-                    # 2. Run backend subprocess
-                    logdir_name = downloads_path
-                    input_filename = "input_log"
-                    command = (
-                        f"python ../main.py "
-                        f"--config_file \"{yaml_path}\" "
-                        f"--logdir \"{downloads_path}\" "
-                        f"--output_file_name \"output_log.out\""
-                    )
-                    result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        # 4. Show downloads after success
+        if st.session_state.get("run_triggered", False):
+            log_path = os.path.join(downloads_path, "input_log_info.log")
+            if os.path.exists(log_path):
+                with open(log_path, "r") as f:
+                    st.download_button("🗂️ Download Log File", f.read(), file_name="pydoseia_log_file.txt")
 
-                    # 3. Handle result
-                    if result.returncode != 0:
-                        st.error("❌ Backend processing failed:")
-                        st.code(result.stderr)
-                        st.text(result.stdout)
-                        st.session_state["run_triggered"] = False
-                    else:
-                        st.success("Simulation complete. Files saved to Downloads folder.", icon=":material/published_with_changes:")
-                        st.session_state["run_triggered"] = True
-
-                st.download_button("📘 Download YAML Input Log", data=yaml_data, file_name="input_log.yaml", mime="text/yaml")
-
-            # 4. Show downloads after success
-            if st.session_state.get("run_triggered", False):
-                log_path = os.path.join(downloads_path, "input_log_info.log")
-                if os.path.exists(log_path):
-                    with open(log_path, "r") as f:
-                        st.download_button("🗂️ Download Log File", f.read(), file_name="pydoseia_log_file.txt")
-
-                out_path = os.path.join(downloads_path, "input_log")
-                if os.path.exists(out_path):
-                    with open(out_path, "r") as f:
-                        st.download_button("📊 Download Output File", f.read(), file_name="pydoseia_out_file.txt")
+            out_path = os.path.join(downloads_path, "input_log")
+            if os.path.exists(out_path):
+                with open(out_path, "r") as f:
+                    st.download_button("📊 Download Output File", f.read(), file_name="pydoseia_out_file.txt")
 
 
 st.set_page_config(page_title="pyDOSEIA GUI", page_icon=":musical_note:", layout="wide")
