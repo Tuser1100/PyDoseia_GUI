@@ -47,6 +47,7 @@ class Fields:
             sheet_names = met_df.sheet_names
 
             tabs = st.tabs([f"📄 {name}" for name in sheet_names])
+            col_headers = []
             for idx, sheet_name in enumerate(sheet_names):
                 with tabs[idx]:
                     try:
@@ -55,8 +56,15 @@ class Fields:
                         st.dataframe(sheet_df.head())
                         st.markdown("**Detected Columns:**")
                         st.write(sheet_df.columns.tolist())
+                        col_headers.append(set(sheet_df.columns.tolist()))
                     except Exception as e:
                         st.warning(f"Couldn't load sheet `{sheet_name}`: {e}")
+
+
+            # Check for inconsistent columns (names only, order ignored)
+            if len(set(frozenset(cols) for cols in col_headers)) > 1:
+                st.error("❌ Inconsistent column names across sheets. All sheets must have the same named columns.")
+                return existing_inputs
 
             selected_sheets = st.multiselect("Select Excel sheets to use for meteorological data:", options=sheet_names)
             existing_inputs["excel_sheet_name"] = selected_sheets
@@ -99,4 +107,73 @@ class Fields:
                 existing_inputs["num_days"] = num_days_list
 
         return existing_inputs
+
+    #To avoid redunancy in met_data func
+    def timing_calm_inputs (self, compute_dose, existing_inputs):
+        col1, col2 = st.columns(2)
+        with col1:
+            timing_str = st.text_input("Plant operation time (start,end in hours)", "0,24", key=f"operation_time_{'dose' if compute_dose else 'df'}")
+            try:
+                timing_values = [float(x.strip()) for x in timing_str.split(",") if x.strip() != ""]
+                if len(timing_values) > 2 or any(t < 0 or t > 24 for t in timing_values):
+                    st.error("Please provide up to 2 values between 0 and 24.")
+                    timing_values = []
+                elif len(timing_values) == 2 and timing_values[0] > timing_values[1]:
+                    st.error("Start time must be less than or equal to end time.")
+                    timing_values = []
+                else:
+                    existing_inputs["start_operation_time"] = timing_values[0] if len(timing_values) > 0 else None
+                    existing_inputs["end_operation_time"] = timing_values[1] if len(timing_values) > 1 else None                            
+            except ValueError:
+                st.error("Operation time must be numeric values between 0 and 24.")
+                timing_values = []
+
+        with col2:
+            calm = st.selectbox("Calm correction?", ["No", "Yes"], key=f"calm_{'dose' if compute_dose else 'df'}")
+            existing_inputs["calm_correction"] = calm
         
+        return existing_inputs
+
+    def dose_type_selector(self, existing_inputs):
+        import streamlit as st
+
+        with st.expander("Select Dose Types", icon=":material/category:"):
+            st.markdown("Click to select one or more applicable dose types:")
+
+            #options = ["Inhalation Dose", "Plume Shine", "Ground Shine", "Submersion Dose", "Ingestion Dose"]
+            col= st.columns(5)
+            selected_types = []
+
+            #toggle across one line
+            with col[0]:
+                inhalation = st.toggle("Inhahalation Dose", value=True, key="inhalation_dose")
+                if inhalation: selected_types.append("Inhalation Dose")
+            with col[1]:
+                ground = st.toggle("Ground Shine", value=True, key="ground_shine")
+                if ground: selected_types.append("Ground Shine")
+            with col[2]:
+                submersion = st.toggle("Submersion Dose", value=True, key="submersion_dose")
+                if submersion: selected_types.append("Submersion Dose")
+            with col[3]:
+                ingestion = st.toggle("Ingestion Dose", value=True, key="ingestion_dose")
+                if ingestion: selected_types.append("Ingestion Dose")
+            with col[4]:
+                plume = st.toggle("Plume Shine", value=True, key="plume_shine")
+                if plume: selected_types.append("Plume Shine")
+
+            existing_inputs["selected_dose_types"] = selected_types
+
+            st.divider()
+
+            if "Ground Shine" in selected_types:
+                with st.popover("Ground Shine Inputs", icon=":material/info:"):
+                    st.markdown("### 🪨 Ground Shine Configuration")
+                    weather_corr = st.selectbox("Apply weathering correction?", ["Yes", "No"], key="weathering_corr")
+                    exposure_period = st.number_input("Exposure period (years)", min_value=0.0, value=1.0, step=0.5, key="exposure_period")
+                    existing_inputs["weathering_corr"] = (weather_corr == "Yes")
+                    existing_inputs["exposure_period"] = exposure_period
+
+            # TODO: Add popovers for the other types here when needed
+            # For example: if "Plume Shine" in selected_types: ...
+
+        return existing_inputs
