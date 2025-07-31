@@ -24,8 +24,10 @@ class DoseiaGUI:
     def show_rad_info(self):
         with st.expander("☢️ RAD-INFO"):
             self.selected = st.multiselect("Choose one or more radionuclides:", options=self.radionuclides)
-            #Ensures H-3 is always last rad
-            self.inputs["rads_list"] = [rn for rn in self.selected if rn != "H-3"] + (["H-3"] if "H-3" in self.selected else [])
+            self.inputs["rads_list"] = [rn for rn in self.selected if rn != "H-3"] + (["H-3"] if "H-3" in self.selected else []) #Ensures H-3 is always last rad
+
+            element_list = [rad.split("-")[0] for rad in self.inputs["rads_list"]]
+            self.inputs["element_list"] = element_list
 
             if self.selected:
                 with st.popover("Radionuclide Info", icon=":material/info:"):
@@ -69,7 +71,7 @@ class DoseiaGUI:
         with st.expander(section_title):
             col1, col2 = st.columns(2)
             with col1:
-                release_height = st.number_input("Release height (m)", min_value=0.0, key=f"release_height_{'dose' if compute_dose else 'df'}")
+                release_height = st.number_input("Release height (m)", min_value=0.0, value=80.0, key=f"release_height_{'dose' if compute_dose else 'df'}")
                 self.inputs["release_height"] = release_height
             with col2:
                 downwind_str = st.text_input("Downwind distances (comma-separated, in meters)", "100,200", key=f"downwind_dist_{'dose' if compute_dose else 'df'}")
@@ -88,7 +90,7 @@ class DoseiaGUI:
                 self.inputs["long_term_release"] = release_type == "Long-term"  #key name as per backend expectation
                 self.inputs["single_plume"] = release_type == "Short-term"
             with col4:
-                measurement_height = st.number_input("Measurement height (m)", min_value=0.0, key=f"measurement_height_{'dose' if compute_dose else 'df'}")
+                measurement_height = st.number_input("Measurement height (m)", min_value=0.0, value=10.0, key=f"measurement_height_{'dose' if compute_dose else 'df'}")
                 self.inputs["measurement_height"] = measurement_height
                 if release_type == "Long-term":
                     concentration = st.selectbox("Ground-level time-integrated concentration (Z=0)?", ["Yes", "No"], key=f"concentration_{'dose' if compute_dose else 'df'}")
@@ -117,6 +119,16 @@ class DoseiaGUI:
             
             #Dilution Factor logic, Req modularization
             if compute_dose:
+                label = "Annual Discharge (Bq/year)" if release_type == "Long-term" else "Instantaneous Release (Bq)"
+                with st.expander(f"{label} per Radionuclide", expanded=True):
+                    discharge_vals = [0.0] * len(self.selected)
+                    cols = st.columns(5)
+                    for idx, rad in enumerate(self.selected):
+                        with cols[idx % 5]: 
+                            discharge_vals[idx] = st.number_input(f"{rad}", min_value=0.0, value=1.0, step=1.0, key=f"{rad}_discharge")
+                    key = "annual_discharge_bq_rad_list" if release_type == "Long-term" else "instantaneous_release_bq_list"
+                    self.inputs[key] = discharge_vals
+
                 has_dilution = st.selectbox("Do you already have a dilution factor?", ["No", "Yes"]) #Key not required as this input is inovked only under comp dose
                 self.inputs["have_dilution_factor"] = has_dilution == "Yes"
 
@@ -139,7 +151,7 @@ class DoseiaGUI:
 
             if (compute_dose and has_dilution == "No") or (not compute_dose): #METEROLOGICAL DATA HANDLING
                 has_meta = st.selectbox("Have meteorological data?", ["No", "Yes"], key=f"has_meta_{'dose' if compute_dose else 'df'}")
-                self.inputs["have_met_data"] = has_meta == "Yes"
+                self.inputs["have_met_data"] = self.inputs["scaling_dilution_factor_based_on_met_data_speed_distribution"] = has_meta == "Yes"
 
                 if has_meta == "Yes":
                     uploaded_file = st.file_uploader("Upload meteorological data (CSV/Excel)", type=["csv", "xlsx"])
@@ -217,12 +229,12 @@ class DoseiaGUI:
                 logdir_name = downloads_path
                 input_filename = "input_log"
                 command = (
-                    f"python ../main.py "
+                    f"python main.py "
                     f"--config_file \"{yaml_path}\" "
                     f"--logdir \"{downloads_path}\" "
                     f"--output_file_name \"output_log.out\""
                 )
-                result = subprocess.run(command, shell=True, capture_output=True, text=True)
+                result = subprocess.run(command, cwd="../", shell=True, capture_output=True, text=True)
 
                 # 3. Handle result
                 if result.returncode != 0:
@@ -251,10 +263,16 @@ class DoseiaGUI:
 
 st.set_page_config(page_title="pyDOSEIA GUI", page_icon=":musical_note:", layout="wide")
 
+if "active_tab" not in st.session_state:
+    st.session_state["active_tab"] = "dose"
+
 app = DoseiaGUI()
 tabs = st.tabs(["☢️ Dose Computation", "🌫️ Dilution Factor Only"])
 
 with tabs[0]:
+    if st.session_state["active_tab"] != "dose":
+        app.inputs.clear()
+        st.session_state["active_tab"] = "dose"
     st.warning("You have selected **Dose Computation**. Radionuclide selection is required.")
     col1, col2 = st.columns([1, 3])
     with col1:
@@ -268,6 +286,9 @@ with tabs[0]:
             st.info("Dose computation options will appear after radionuclides are selected.")
 
 with tabs[1]:
+    if st.session_state["active_tab"] != "df":
+        app.inputs.clear()
+        st.session_state["active_tab"] = "df"
     st.warning("You have selected **Dilution Factor Computation Only**. Radionuclides are not needed.")
     compute_dose = False
     app.inputs["run_dose_computation"] = compute_dose
