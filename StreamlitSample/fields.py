@@ -140,7 +140,6 @@ class Fields:
         with st.expander("Select Dose Types", icon=":material/category:"):
             st.markdown("Click to select one or more applicable dose types:")
 
-            #options = ["Inhalation Dose", "Plume Shine", "Ground Shine", "Submersion Dose", "Ingestion Dose"]
             col= st.columns(5)
             selected_types = []
 
@@ -162,6 +161,7 @@ class Fields:
                 if ingestion: selected_types.append("Ingestion Dose")
 
             existing_inputs["selected_dose_types"] = selected_types
+            existing_inputs["run_plume_shine_dose"] = plume
 
             st.divider()
 
@@ -220,7 +220,7 @@ class Fields:
                                 hide_index=True,
                                 key="inhale_type_editor"
                             )
-                            type_rad = dict(zip(edited_df["Radionuclide"], edited_df["Inhalation Type"]))
+                            type_rad = edited_df["Inhalation Type"].tolist()
                             existing_inputs["type_rad"] = type_rad
 
             #Ground Shine Dose Popover
@@ -247,33 +247,33 @@ class Fields:
                         st.markdown("### Plume Shine Configuration")
                         st.info("No additional inputs for Plume shine dose at this time.")
                         ps_parallel = st.toggle("Run using parallel processing", value=True, disabled=True, key="plume_parallel_toggle")
-                        existing_inputs["run_plume_shine_dose"] = plume  # 'plume' is already True if toggle selected
                         existing_inputs["run_ps_dose_parallel"] = ps_parallel
 
             #Ingestion Dose Popover
             if "Ingestion Dose" in selected_types:
                 with col[4]:
                     with st.popover("Ingestion Dose Inputs", icon=":material/vo2_max:"):
-                        existing_inputs = self.ingestion_inputs(existing_inputs)
+                        existing_inputs = self.ingestion_inputs(existing_inputs, selected_rads)
 
             # TODO: Add popovers for the other types here when needed
             # For example: if "Plume Shine" in selected_types: ...
 
         return existing_inputs
 
-    def ingestion_inputs(self, existing_inputs):
+    def ingestion_inputs(self, existing_inputs, selected_rads):
         st.markdown("### Ingestion Dose Configuration")
 
         # 1. Soil Type
         soil = st.selectbox("Select soil type:", ["peatsoil", "othersoil"], key="ing_soil_type")
         existing_inputs["soiltype"] = soil
 
-        # 2. Detect which age groups are present
+        # 2. Detect which age groups and special rads are present
         age_group = existing_inputs.get("age_group", [])
         ad = len([_ for _ in age_group if _ >= 18])
         adult_present = ad > 0
         infant_present = 1 in age_group
         only_infant_present = 1 in age_group and ad == 0
+        h3c14_present = any(rad in selected_rads for rad in ['H-3','C-14'])        
 
         # 3. Shared help messages for all inges inputs
         help_dict = {
@@ -349,6 +349,8 @@ class Fields:
             tab_labels.append("Adult Ingestion")
         if infant_present or only_infant_present:
             tab_labels.append("Infant Ingestion")
+        if h3c14_present:
+            tab_labels.append("Tritium/C-14 Parameters")
 
         tab_objs = st.tabs(tab_labels)
         
@@ -383,5 +385,32 @@ class Fields:
                     with cols[i % 3]:
                         inges_infant[param] = st.number_input(label=param, value=default, format="%.10f", help=help_dict[param], key=f"infant_{param}")
                 existing_inputs["inges_param_dict_infant"] = inges_infant
+            tab_idx += 1
+
+        if h3c14_present:
+            with tab_objs[tab_idx]:
+                st.subheader("Special Case Configuration for H-3 / C-14")
+
+                veg_options = ["leafy_vegetables", "non_leafy_vegetables", "root_crops", "all_others"]
+                veg_selection = st.multiselect("Select terrestrial vegetable types:", options=veg_options, key="veg_type_list")
+                existing_inputs["veg_type_list"] = veg_selection
+
+                climate_options = ["Arctic", "Mediterranean", "Maritime", "Continental"]
+                climate = st.selectbox("Select climate condition:", options=climate_options, key="climate_select")
+                existing_inputs["climate"] = climate
+
+                feed_options = ["leafy_vegetables", "non_leafy_vegetables", "root_crops", "all_others"]
+                feed_selection = st.multiselect("Select feed types for animals:", options=feed_options, key="animal_feed_type")
+                existing_inputs["animal_feed_type"] = feed_selection
+
+                # Animal products selection (for H-3 or C-14 or both)
+                product_options = ["cow_milk", "goat_milk", "goat_meat", "lamb_meat", "beef_meat", "pork_meat", "broiler_meat", "egg"]
+                if "H-3" in selected_rads:
+                    animal_prod_h3 = st.multiselect("Animal products for H-3", options=product_options, key="prod_h3")
+                    existing_inputs["animal_product_list_for_tritium"] = animal_prod_h3
+
+                if "C-14" in selected_rads:
+                    animal_prod_c14 = st.multiselect("Animal products for C-14", options=product_options, key="prod_c14")
+                    existing_inputs["animal_product_list_for_c14"] = animal_prod_c14
 
         return existing_inputs
