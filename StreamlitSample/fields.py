@@ -167,9 +167,9 @@ class Fields:
 
             # Age Group
             ag_msg = "Plume Shine dose runs irrespective of age group"
-            age_str = st.text_input("Age Group List separated by commas(years)", value="1,5,15,70", help=ag_msg, key="age_group_input")
+            age_str = st.text_input("Age Group List separated by commas(years)", value="1,18", help=ag_msg, key="age_group_input")
             try:
-                age_list = [float(a.strip()) for a in age_str.split(",") if a.strip() != ""]
+                age_list = [int(a.strip()) for a in age_str.split(",") if a.strip() != ""]
                 if any(age < 1 for age in age_list):
                     st.error("All age group values must be **greater than or equal to 1**.")
                     existing_inputs["age_group"] = []
@@ -256,7 +256,6 @@ class Fields:
                         existing_inputs = self.ingestion_inputs(existing_inputs, selected_rads)
 
             # TODO: Add popovers for the other types here when needed
-            # For example: if "Plume Shine" in selected_types: ...
 
         return existing_inputs
 
