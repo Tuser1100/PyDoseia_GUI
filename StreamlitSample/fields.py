@@ -5,7 +5,7 @@ import streamlit as st
 class Fields:
 
     def __init__(self):
-        self.df2 = pd.read_csv("Annex_H_ICRP119_dcf_inhal_reactive_soluble_gases_public.csv")["Nuclide"].dropna().unique().tolist()
+        self.df2 = pd.read_csv("files/Annex_H_ICRP119_dcf_inhal_reactive_soluble_gases_public.csv")["Nuclide"].dropna().unique().tolist()
 
     def met_data(self, uploaded_file, existing_inputs):
         temp_dir = tempfile.gettempdir()
@@ -130,7 +130,7 @@ class Fields:
 
         with col2:
             calm = st.selectbox("Calm correction?", ["No", "Yes"], key=f"calm_{'dose' if compute_dose else 'df'}")
-            existing_inputs["calm_correction"] = calm
+            existing_inputs["calm_correction"] = calm == "Yes"
         
         return existing_inputs
 
@@ -359,7 +359,7 @@ class Fields:
             cols = st.columns(3)
             for i, (param, default) in enumerate(default_inges.items()):
                 with cols[i % 3]:
-                    inges_param[param] = st.number_input(label=param, value=default, format="%.10f", help=help_dict[param], key=f"inges_{param}")
+                    inges_param[param] = self.validate_scientific_num_inputs(label=param, default_val=default, help_msg=help_dict[param], key=f"inges_{param}")
             existing_inputs["inges_param_dict"] = inges_param
 
         tab_idx = 1
@@ -371,7 +371,7 @@ class Fields:
                 cols = st.columns(3)
                 for i, (param, default) in enumerate(default_adult.items()):
                     with cols[i % 3]:
-                        inges_adult[param] = st.number_input(label=param, value=default, format="%.10f", help=help_dict[param], key=f"adult_{param}")
+                        inges_adult[param] = self.validate_scientific_num_inputs(label=param, default_val=default, help_msg=help_dict[param], key=f"adult_{param}")
                 existing_inputs["inges_param_dict_adult"] = inges_adult
             tab_idx += 1
 
@@ -382,7 +382,7 @@ class Fields:
                 cols = st.columns(3)
                 for i, (param, default) in enumerate(default_infant.items()):
                     with cols[i % 3]:
-                        inges_infant[param] = st.number_input(label=param, value=default, format="%.10f", help=help_dict[param], key=f"infant_{param}")
+                        inges_infant[param] = self.validate_scientific_num_inputs(label=param, default_val=default, help_msg=help_dict[param], key=f"infant_{param}")
                 existing_inputs["inges_param_dict_infant"] = inges_infant
             tab_idx += 1
 
@@ -391,7 +391,7 @@ class Fields:
                 st.subheader("Special Case Configuration for H-3 / C-14")
 
                 veg_options = ["leafy_vegetables", "non_leafy_vegetables", "root_crops", "all_others"]
-                veg_selection = st.multiselect("Select terrestrial vegetable types:", options=veg_options, key="veg_type_list")
+                veg_selection = st.selectbox("Select terrestrial vegetable types:", options=veg_options, key="veg_type_list")
                 existing_inputs["veg_type_list"] = veg_selection
 
                 climate_options = ["Arctic", "Mediterranean", "Maritime", "Continental"]
@@ -399,7 +399,7 @@ class Fields:
                 existing_inputs["climate"] = climate
 
                 feed_options = ["leafy_vegetables", "non_leafy_vegetables", "root_crops", "all_others"]
-                feed_selection = st.multiselect("Select feed types for animals:", options=feed_options, key="animal_feed_type")
+                feed_selection = st.selectbox("Select feed types for animals:", options=feed_options, key="animal_feed_type")
                 existing_inputs["animal_feed_type"] = feed_selection
 
                 # Animal products selection (for H-3 or C-14 or both)
@@ -413,3 +413,12 @@ class Fields:
                     existing_inputs["animal_product_list_for_c14"] = animal_prod_c14
 
         return existing_inputs
+
+    def validate_scientific_num_inputs (self, label, default_val, key, help_msg=""): 
+        input_str = st.text_input(label=label, value=default_val, help=help_msg, key=key)
+        try:
+            validated_val = float(input_str)
+            return validated_val
+        except (ValueError, TypeError):
+            st.error(f"Invalid numeric input for `{label}`. Please use standard or scientific notation (1.23e-4).")
+            return float(default_val)
