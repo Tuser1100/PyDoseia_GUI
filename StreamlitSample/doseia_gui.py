@@ -15,7 +15,7 @@ class DoseiaGUI:
     #import os
     
     def __init__(self):
-        self.df = pd.read_excel("doe_haz_cat_excel.xlsx")
+        self.df = pd.read_excel("files/doe_haz_cat_excel.xlsx")
         self.radionuclides = sorted(self.df["Radionuclide"].dropna().unique().tolist())
         self.selected = []
         self.coefficients = {}
@@ -50,13 +50,14 @@ class DoseiaGUI:
         import os
 
         self.inputs["plot_dilution_factor"] = False
+        self.inputs["max_dilution_factor"] = None
         self.inputs["pickle_it"] = st.session_state.get("pickle_it", False) #Restore input from sidebar
         section_title = "🧮 Dose Computation" if compute_dose else "🌫️ Dilution Factor Computation"
 
         with st.expander(section_title):
             col1, col2 = st.columns(2)
             with col1:
-                release_height = st.number_input("Release height (m)", min_value=0.0, value=80.0, key=f"release_height_{'dose' if compute_dose else 'df'}")
+                release_height = fields.validate_scientific_num_inputs(label="Release height (m)", default_val="80.0", key=f"release_height_{'dose' if compute_dose else 'df'}")
                 self.inputs["release_height"] = release_height
             with col2:
                 downwind_str = st.text_input("Downwind distances (comma-separated, in meters)", "100,200", key=f"downwind_dist_{'dose' if compute_dose else 'df'}")
@@ -75,7 +76,7 @@ class DoseiaGUI:
                 self.inputs["long_term_release"] = release_type == "Long-term"  #key name as per backend expectation
                 self.inputs["single_plume"] = release_type == "Short-term"
             with col4:
-                measurement_height = st.number_input("Measurement height (m)", min_value=0.0, value=10.0, key=f"measurement_height_{'dose' if compute_dose else 'df'}")
+                measurement_height = fields.validate_scientific_num_inputs(label="Measurement height (m)", default_val="10.0", key=f"measurement_height_{'dose' if compute_dose else 'df'}")
                 self.inputs["measurement_height"] = measurement_height
                 if release_type == "Long-term":
                     concentration = st.selectbox("Ground-level time-integrated concentration (Z=0)?", ["Yes", "No"], key=f"concentration_{'dose' if compute_dose else 'df'}")
@@ -111,7 +112,7 @@ class DoseiaGUI:
                     cols = st.columns(5)
                     for idx, rad in enumerate(self.selected):
                         with cols[idx % 5]: 
-                            discharge_vals[idx] = st.number_input(f"{rad}", min_value=0.0, value=1.0, step=1.0, key=f"{rad}_discharge")
+                            discharge_vals[idx] = fields.validate_scientific_num_inputs(label=f"{rad}", default_val="1.0", key=f"{rad}_discharge")
                     key = "annual_discharge_bq_rad_list" if release_type == "Long-term" else "instantaneous_release_bq_list"
                     self.inputs[key] = discharge_vals
 
