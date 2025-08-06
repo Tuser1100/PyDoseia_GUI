@@ -4,6 +4,7 @@ import yaml
 import subprocess
 import tempfile
 from fields import Fields
+from runner import handle_run
 
 fields = Fields()
 
@@ -14,7 +15,7 @@ class DoseiaGUI:
     #import os
     
     def __init__(self):
-        self.df = pd.read_excel("doe_haz_cat_excel.xlsx")
+        self.df = pd.read_excel("files/doe_haz_cat_excel.xlsx")
         self.radionuclides = sorted(self.df["Radionuclide"].dropna().unique().tolist())
         self.selected = []
         self.coefficients = {}
@@ -47,31 +48,16 @@ class DoseiaGUI:
     def show_dose_block(self, compute_dose):
         import time
         import os
-
-        downloads_path = os.path.join(os.path.expanduser("~"), "Downloads")
-        os.makedirs(downloads_path, exist_ok=True)
-
-        with st.container():
-            col_pick1, col_pick2 = st.columns([10, 1])
-            with col_pick1:
-                pickle_it = st.toggle("Pickle it?", value=False, key=f"pkl_toggle_{'dose' if compute_dose else 'df'}")
-                self.inputs["pickle_it"] = pickle_it
-            with col_pick2:
-                with st.popover("info", icon=":material/info:"):
-                    st.markdown("### 🧊 Pickle it?")
-                    st.write(
-                        "If this is enabled, the program will serialize internal Python objects (like input data) "
-                        "into a `.pkl` file for advanced reuse, debugging, or deeper analysis. "
-                        "This is mainly for advanced users or developers."
-                    )
-                    st.info("Leave this **off** if you're not sure.")
-
+        
+        self.inputs["plot_dilution_factor"] = False
+        self.inputs["max_dilution_factor"] = None
+        self.inputs["pickle_it"] = st.session_state.get("pickle_it", False) #Restore input from sidebar
         section_title = "🧮 Dose Computation" if compute_dose else "🌫️ Dilution Factor Computation"
 
         with st.expander(section_title):
             col1, col2 = st.columns(2)
             with col1:
-                release_height = st.number_input("Release height (m)", min_value=0.0, value=80.0, key=f"release_height_{'dose' if compute_dose else 'df'}")
+                release_height = fields.validate_scientific_num_inputs(label="Release height (m)", default_val="80.0", key=f"release_height_{'dose' if compute_dose else 'df'}")
                 self.inputs["release_height"] = release_height
             with col2:
                 downwind_str = st.text_input("Downwind distances (comma-separated, in meters)", "100,200", key=f"downwind_dist_{'dose' if compute_dose else 'df'}")
@@ -90,7 +76,7 @@ class DoseiaGUI:
                 self.inputs["long_term_release"] = release_type == "Long-term"  #key name as per backend expectation
                 self.inputs["single_plume"] = release_type == "Short-term"
             with col4:
-                measurement_height = st.number_input("Measurement height (m)", min_value=0.0, value=10.0, key=f"measurement_height_{'dose' if compute_dose else 'df'}")
+                measurement_height = fields.validate_scientific_num_inputs(label="Measurement height (m)", default_val="10.0", key=f"measurement_height_{'dose' if compute_dose else 'df'}")
                 self.inputs["measurement_height"] = measurement_height
                 if release_type == "Long-term":
                     concentration = st.selectbox("Ground-level time-integrated concentration (Z=0)?", ["Yes", "No"], key=f"concentration_{'dose' if compute_dose else 'df'}")
@@ -118,6 +104,7 @@ class DoseiaGUI:
                             self.inputs["Z"] = z_val
             
             #Dilution Factor logic, Req modularization
+            self.inputs["have_dilution_factor"] = False
             if compute_dose:
                 label = "Annual Discharge (Bq/year)" if release_type == "Long-term" else "Instantaneous Release (Bq)"
                 with st.expander(f"{label} per Radionuclide", expanded=True):
@@ -125,7 +112,7 @@ class DoseiaGUI:
                     cols = st.columns(5)
                     for idx, rad in enumerate(self.selected):
                         with cols[idx % 5]: 
-                            discharge_vals[idx] = st.number_input(f"{rad}", min_value=0.0, value=1.0, step=1.0, key=f"{rad}_discharge")
+                            discharge_vals[idx] = fields.validate_scientific_num_inputs(label=f"{rad}", default_val="1.0", key=f"{rad}_discharge")
                     key = "annual_discharge_bq_rad_list" if release_type == "Long-term" else "instantaneous_release_bq_list"
                     self.inputs[key] = discharge_vals
 
@@ -151,7 +138,7 @@ class DoseiaGUI:
 
             if (compute_dose and has_dilution == "No") or (not compute_dose): #METEROLOGICAL DATA HANDLING
                 has_meta = st.selectbox("Have meteorological data?", ["No", "Yes"], key=f"has_meta_{'dose' if compute_dose else 'df'}")
-                self.inputs["have_met_data"] = self.inputs["scaling_dilution_factor_based_on_met_data_speed_distribution"] = has_meta == "Yes"
+                self.inputs["have_met_data"] = self.inputs["scaling_dilution_factor_based_on_met_data_speed_distribution"] = self.inputs["plot_dilution_factor"] = has_meta == "Yes"
 
                 if has_meta == "Yes":
                     uploaded_file = st.file_uploader("Upload meteorological data (CSV/Excel)", type=["csv", "xlsx"])
@@ -172,11 +159,11 @@ class DoseiaGUI:
         
                     else:
                         st.warning("Please upload a meteorological file to proceed.")
-                        self.inputs["path_met_data"] = None
+                        self.inputs["path_met_file"] = None
 
                 else:
                     st.markdown("Using default meteorological data.")
-                    self.inputs["path_met_file"] = "sample_met_data.xlsx"
+                    #self.inputs["path_met_file"] = "sample_met_data.xlsx"
 
                     scale_choice = st.selectbox("Would you like to scale dilution factor with your own mean wind speed?", ["No", "Yes"], key=f"scale_choice_{'dose' if compute_dose else 'df'}")
                     self.inputs["like_to_scale_with_mean_speed"] = scale_choice == "Yes"
@@ -216,57 +203,33 @@ class DoseiaGUI:
                     st.markdown(f"**{label}:** `{value}`")
 
         if st.button("Run", icon=":material/manufacturing:", key=f"run_btn_{'dose' if compute_dose else 'df'}"):
-            with st.spinner("Running simulation and generating files..."):
-                time.sleep(2.5)
-
-                # 1. Save input YAML
-                yaml_path = os.path.join(downloads_path, "input_log.yaml")
-                yaml_data = yaml.dump(self.inputs, sort_keys=False, allow_unicode=True, default_flow_style=False)
-                with open(yaml_path, "w") as f:
-                    f.write(yaml_data)
-
-                # 2. Run backend subprocess
-                logdir_name = downloads_path
-                input_filename = "input_log"
-                command = (
-                    f"python main.py "
-                    f"--config_file \"{yaml_path}\" "
-                    f"--logdir \"{downloads_path}\" "
-                    f"--output_file_name \"output_log.out\""
-                )
-                result = subprocess.run(command, cwd="../", shell=True, capture_output=True, text=True)
-
-                # 3. Handle result
-                if result.returncode != 0:
-                    st.error("❌ Backend processing failed:")
-                    st.code(result.stderr)
-                    st.text(result.stdout)
-                    st.session_state["run_triggered"] = False
-                else:
-                    st.success("Simulation complete. Files saved to Downloads folder.", icon=":material/published_with_changes:")
-                    st.session_state["run_triggered"] = True
-
-            st.download_button("📘 Download YAML Input Log", data=yaml_data, file_name="input_log.yaml", mime="text/yaml")
-
-        # 4. Show downloads after success
-        if st.session_state.get("run_triggered", False):
-            log_path = os.path.join(downloads_path, "input_log_info.log")
-            if os.path.exists(log_path):
-                with open(log_path, "r") as f:
-                    st.download_button("🗂️ Download Log File", f.read(), file_name="pydoseia_log_file.txt")
-
-            out_path = os.path.join(downloads_path, "input_log")
-            if os.path.exists(out_path):
-                with open(out_path, "r") as f:
-                    st.download_button("📊 Download Output File", f.read(), file_name="pydoseia_out_file.txt")
+            self.inputs = handle_run(self.inputs)
 
 
 st.set_page_config(page_title="pyDOSEIA GUI", page_icon=":musical_note:", layout="wide")
+app = DoseiaGUI()
+
+with st.sidebar:
+    st.header("📂 File Settings")
+    st.text_input("Directory name", value="PyDoseia_Run", key="custom_dir")
+    st.text_input("Input file name", value="pydoseia_inp", key="inp_file_name")
+    st.text_input("Output file name", value="pydoseia_out", key="out_file_name")
+    col_pick1, col_pick2 = st.columns(2)
+    with col_pick1:
+        pickle_it = st.toggle("Pickle it?", value=False, key="pickle_it")
+    with col_pick2:
+        with st.popover("info", icon=":material/info:"):
+            st.markdown("### 🧊 Pickle it?")
+            st.write(
+                "If this is enabled, the program will serialize internal Python objects (like input data) "
+                "into a `.pkl` file for advanced reuse, debugging, or deeper analysis. "
+                "This is mainly for advanced users or developers."
+            )
+            st.info("Leave this **off** if you're not sure.")
 
 if "active_tab" not in st.session_state:
     st.session_state["active_tab"] = "dose"
 
-app = DoseiaGUI()
 tabs = st.tabs(["☢️ Dose Computation", "🌫️ Dilution Factor Only"])
 
 with tabs[0]:
@@ -293,3 +256,21 @@ with tabs[1]:
     compute_dose = False
     app.inputs["run_dose_computation"] = compute_dose
     app.show_dose_block(compute_dose)
+
+st.divider() 
+st.markdown(
+    """
+    <div style="text-align: center; padding: 1.2em 0 0.8em 0; font-size: 0.9em; color: #444;">
+        <p style="margin-bottom: 0.3em;">
+            <strong>© Dr. Biswajit Sadhu · Kalpak Gupte</strong> · All rights reserved
+        </p>
+        <p style="margin-bottom: 0.3em;">
+            Licensed under the 
+            <a href="https://github.com/BiswajitSadhu/pyDOSEIA/blob/main/LICENSE" target="_blank" style="color: #1f77b4; text-decoration: none;">
+                MIT License
+            </a>
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
